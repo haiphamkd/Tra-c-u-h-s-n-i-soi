@@ -20,6 +20,7 @@ interface HistoryItem {
 
 type TimeRange = '7' | '30' | '90' | '180' | '365' | 'all';
 type SearchScope = 'global' | 'current';
+type LimitOption = 5000 | 10000 | 15000 | 20000 | 'all';
 
 const App: React.FC = () => {
   // State Management
@@ -36,6 +37,7 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] = useState<SearchScope>('global');
   const [timeRange, setTimeRange] = useState<TimeRange>('30'); // Default 30 days
+  const [limit, setLimit] = useState<LimitOption>(5000); // Default 5000 items
   
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
@@ -51,7 +53,14 @@ const App: React.FC = () => {
   }, [scriptUrl]);
 
   // Main Data Loading Logic
-  const refreshData = useCallback(async (url: string, folderId: string | undefined, query: string | undefined, days: string, scope: SearchScope = 'global') => {
+  const refreshData = useCallback(async (
+      url: string, 
+      folderId: string | undefined, 
+      query: string | undefined, 
+      days: string, 
+      scope: SearchScope = 'global',
+      itemLimit: LimitOption = 5000
+    ) => {
       setIsLoading(true);
       setError(null);
       
@@ -64,12 +73,22 @@ const App: React.FC = () => {
           // If scope is global search, we ignore folderId usually, but let's pass it anyway
           const effectiveFolderId = (query && scope === 'global') ? undefined : folderId;
 
-          const data = await fetchDriveData(url, effectiveFolderId, query, days, scope);
+          let data = await fetchDriveData(url, effectiveFolderId, query, days, scope, itemLimit);
           
           if (data.length > 0 && data[0].name.startsWith("Lỗi:")) {
               setError(data[0].name);
               if (!query) setItems([]); 
           } else {
+              // --- V14 AUTO EXPAND LOGIC ---
+              // If we found nothing in a subfolder (not root), and we are NOT looking at "All time",
+              // it likely means the files are old. Automatically fetch "All Time".
+              if (data.length === 0 && days !== 'all' && !query && folderId !== undefined && folderId !== 'root') {
+                  // console.log("Empty result for recent files. Auto-fetching ALL time...");
+                  setTimeRange('all'); // Update UI to reflect we are now showing all
+                  // Keep the limit as is, or maybe default to higher if needed, but for now respect user limit
+                  data = await fetchDriveData(url, effectiveFolderId, query, 'all', scope, itemLimit);
+              }
+
               setItems(data);
 
               // Update Cache only if it's a standard browse view (not search)
@@ -89,14 +108,15 @@ const App: React.FC = () => {
       }
   }, []);
 
-  // Effect to load data when navigation/time changes (BUT NOT SEARCH QUERY)
+  // Effect to load data when navigation/time/limit changes (BUT NOT SEARCH QUERY)
   useEffect(() => {
       if (!scriptUrl) return;
 
       const folderIdToFetch = currentFolderId === 'root' ? undefined : currentFolderId;
       
-      // Optimization: Use cache if available AND default time range
-      if (folderCache[currentFolderId] && !activeTag && searchQuery === '' && timeRange === '30') {
+      // Optimization: Use cache if available AND default time range AND default limit
+      // If user changed limit, we must re-fetch so ignore cache
+      if (limit === 5000 && folderCache[currentFolderId] && !activeTag && searchQuery === '' && timeRange === '30') {
           setItems(folderCache[currentFolderId]);
           setIsLoading(false);
           setError(null);
@@ -106,9 +126,9 @@ const App: React.FC = () => {
       // Fetch from server (Standard Browse)
       // Only fetch if NOT searching. Search is triggered by Enter or explicit button.
       if (searchQuery === '') {
-          refreshData(scriptUrl, folderIdToFetch, undefined, timeRange);
+          refreshData(scriptUrl, folderIdToFetch, undefined, timeRange, 'global', limit);
       }
-  }, [currentFolderId, scriptUrl, timeRange, refreshData]); 
+  }, [currentFolderId, scriptUrl, timeRange, limit, refreshData]); 
 
   // --- Handlers ---
 
@@ -170,7 +190,7 @@ const App: React.FC = () => {
       e.preventDefault();
       // On Enter, trigger Server-Side Search
       const folderIdToFetch = currentFolderId === 'root' ? undefined : currentFolderId;
-      refreshData(scriptUrl, folderIdToFetch, searchQuery, timeRange, searchScope);
+      refreshData(scriptUrl, folderIdToFetch, searchQuery, timeRange, searchScope, limit);
   };
 
   const handleClearSearch = () => {
@@ -180,17 +200,22 @@ const App: React.FC = () => {
       if (items.length > 0 && !folderCache[currentFolderId || 'root']?.includes(items[0])) {
           // It was likely a server search result, so reload folder
           const folderIdToFetch = currentFolderId === 'root' ? undefined : currentFolderId;
-          refreshData(scriptUrl, folderIdToFetch, undefined, timeRange);
+          refreshData(scriptUrl, folderIdToFetch, undefined, timeRange, 'global', limit);
       }
   };
 
   const handleRefreshClick = () => {
     const folderIdToFetch = currentFolderId === 'root' ? undefined : currentFolderId;
-    refreshData(scriptUrl, folderIdToFetch, searchQuery || undefined, timeRange, searchScope);
+    refreshData(scriptUrl, folderIdToFetch, searchQuery || undefined, timeRange, searchScope, limit);
   };
   
   const handleTimeRangeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
       setTimeRange(e.target.value as TimeRange);
+  };
+
+  const handleLimitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const val = e.target.value;
+      setLimit(val === 'all' ? 'all' : Number(val) as LimitOption);
   };
 
   // SMART FILTERING
@@ -358,7 +383,7 @@ const App: React.FC = () => {
         <Breadcrumbs items={history} onNavigate={handleBreadcrumbNavigate} />
 
         {/* Actions Bar */}
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+        <div className="mb-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-gray-100 pb-4">
           <div>
             <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
                 {history.length > 1 ? history[history.length - 1].name : 'Danh sách hồ sơ'}
@@ -367,7 +392,7 @@ const App: React.FC = () => {
                 {isLoading ? (
                     <span className="flex items-center gap-2 text-blue-600 bg-blue-50 px-2 py-1 rounded">
                         <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                        Đang tải dữ liệu...
+                        Đang tải dữ liệu{limit === 'all' && ' (Tối đa)'}...
                     </span>
                 ) : (
                     <span>
@@ -380,7 +405,7 @@ const App: React.FC = () => {
             </div>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
               {/* TIME RANGE SELECTOR */}
               <div className="relative">
                   <select
@@ -395,6 +420,25 @@ const App: React.FC = () => {
                       <option value="180">6 tháng qua</option>
                       <option value="365">1 năm qua</option>
                       <option value="all">Tất cả thời gian</option>
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </div>
+              </div>
+              
+              {/* LIMIT SELECTOR */}
+              <div className="relative">
+                  <select
+                    value={limit}
+                    onChange={handleLimitChange}
+                    disabled={isLoading}
+                    className="appearance-none bg-white border border-gray-200 text-gray-700 text-sm py-1.5 pl-3 pr-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent cursor-pointer hover:bg-gray-50"
+                  >
+                      <option value="5000">Max: 5.000</option>
+                      <option value="10000">Max: 10.000</option>
+                      <option value="15000">Max: 15.000</option>
+                      <option value="20000">Max: 20.000</option>
+                      <option value="all">Không giới hạn</option>
                   </select>
                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -464,18 +508,16 @@ const App: React.FC = () => {
             </p>
             
             <div className="mt-6 flex flex-col items-center gap-3">
-                {/* 1. Solution for Hidden Files due to Time Filter */}
+                {/* 1. Solution for Hidden Files due to Time Filter - NOW HANDLED AUTOMATICALLY BUT KEPT AS BACKUP */}
                 {!searchQuery && timeRange !== 'all' && (
                     <button 
                         onClick={() => {
                             setTimeRange('all');
-                            // We need to trigger a refresh manually here because useEffect depends on timeRange, 
-                            // but sometimes explicit action is better UX
                         }}
-                        className="px-6 py-3 text-sm font-bold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center gap-2 shadow-md animate-bounce"
+                        className="px-6 py-3 text-sm font-bold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center gap-2 shadow-md"
                     >
                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                         Hiển thị tất cả (Bỏ lọc thời gian)
+                         Thử lại với "Tất cả thời gian"
                     </button>
                 )}
 
@@ -487,7 +529,7 @@ const App: React.FC = () => {
                             // Trigger submit immediately
                             setTimeout(() => {
                                 const folderIdToFetch = currentFolderId === 'root' ? undefined : currentFolderId;
-                                refreshData(scriptUrl, folderIdToFetch, searchQuery, timeRange, 'global');
+                                refreshData(scriptUrl, folderIdToFetch, searchQuery, timeRange, 'global', limit);
                             }, 100);
                         }}
                         className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-2"

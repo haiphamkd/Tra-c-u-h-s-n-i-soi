@@ -6,7 +6,8 @@ export const fetchDriveData = async (
     folderId?: string, 
     searchQuery?: string, 
     days?: string | number,
-    scope: 'global' | 'current' = 'global'
+    scope: 'global' | 'current' = 'global',
+    limit: string | number = 5000
 ): Promise<DirectoryItem[]> => {
   // Timeout 90s for client
   const controller = new AbortController();
@@ -20,6 +21,7 @@ export const fetchDriveData = async (
     if (searchQuery) url.searchParams.append("q", searchQuery);
     if (days) url.searchParams.append("days", days.toString());
     if (scope) url.searchParams.append("scope", scope);
+    if (limit) url.searchParams.append("limit", limit.toString());
     
     // Cache busting (Anti-cache)
     url.searchParams.append("_t", new Date().getTime().toString());

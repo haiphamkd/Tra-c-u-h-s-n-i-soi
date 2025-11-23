@@ -13,16 +13,17 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
   if (!isOpen) return null;
 
   const scriptCode = `function doGet(e) {
-  // --- V13: SEARCH SCOPE & TIME FIX ---
+  // --- V16: DYNAMIC LIMIT MODE ---
   var rootId = "1Ja7GDH5PZMabdkGXhmfTg_hbG1mSzpWk"; 
-  var MAX_EXECUTION_TIME = 25000; 
+  var MAX_EXECUTION_TIME = 25000; // 25 seconds safe limit
   var startTime = new Date().getTime();
   
   try {
     var folderId = rootId;
     var searchQuery = "";
     var days = 30; 
-    var scope = 'global'; // 'global' or 'current'
+    var scope = 'global'; 
+    var limitParam = "5000";
 
     if (e && e.parameter) {
        if (e.parameter.id && e.parameter.id !== "undefined" && e.parameter.id !== "root") {
@@ -31,9 +32,17 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
        if (e.parameter.q) searchQuery = e.parameter.q;
        if (e.parameter.days) days = e.parameter.days;
        if (e.parameter.scope) scope = e.parameter.scope;
+       if (e.parameter.limit) limitParam = e.parameter.limit;
     }
 
-    var HARD_LIMIT = 3000;
+    // Determine limit
+    var HARD_LIMIT = 5000; // Default
+    if (limitParam === "all") {
+        HARD_LIMIT = 100000; // Effectively unlimited within time bounds
+    } else {
+        HARD_LIMIT = parseInt(limitParam) || 5000;
+    }
+    
     var contents = [];
     var timeQuery = "";
     
@@ -76,25 +85,22 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
         return true;
     }
 
-    // --- LOGIC V13: SEARCH SCOPE ---
+    // --- LOGIC ---
     
     if (searchQuery !== "") {
       var safeQuery = searchQuery.replace(/'/g, "\\'");
       var qBase = "title contains '" + safeQuery + "' and trashed = false" + timeQuery;
       
-      // Nếu Scope là 'current', chỉ tìm trong folderId (và con trực tiếp - hạn chế của GAS searchFiles)
-      // Thực tế DriveApp.searchFolders tìm toàn cục (Global).
-      // Để tìm Local, ta phải dùng folder.searchFolders.
-      
       if (scope === 'current' && folderId !== rootId) {
-          // SEARCH LOCAL (Trong thư mục hiện tại)
+          // Local Search
           var currentFolder = DriveApp.getFolderById(folderId);
-          processIterator(currentFolder.searchFolders(qBase), "FOLDER");
+          // Prioritize Files in Search
+          processIterator(currentFolder.searchFiles(qBase), "FILE");
           if (!checkTimeLimit() && contents.length < HARD_LIMIT) {
-              processIterator(currentFolder.searchFiles(qBase), "FILE");
+             processIterator(currentFolder.searchFolders(qBase), "FOLDER");
           }
       } else {
-          // SEARCH GLOBAL (Toàn bộ Drive)
+          // Global Search
           processIterator(DriveApp.searchFolders(qBase), "FOLDER");
           if (!checkTimeLimit() && contents.length < HARD_LIMIT) {
               processIterator(DriveApp.searchFiles(qBase), "FILE");
@@ -102,7 +108,7 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
       }
       
     } else {
-      // BROWSE MODE (Duyệt thư mục bình thường)
+      // BROWSE MODE
       var currentFolder = DriveApp.getFolderById(folderId);
       var folderQ = "trashed = false" + timeQuery;
       var fileQ = "trashed = false" + timeQuery;
@@ -112,16 +118,18 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
           fileQ = "trashed = false";
       }
 
+      // Always allow fetching files if time permits
       if (processIterator(currentFolder.searchFolders(folderQ), "FOLDER")) {
-          var isRoot = (folderId === rootId);
-          var shouldGetFiles = !isRoot || (days !== 'all');
-          if (shouldGetFiles && !checkTimeLimit()) {
+          if (!checkTimeLimit() && contents.length < HARD_LIMIT) {
              processIterator(currentFolder.searchFiles(fileQ), "FILE");
           }
       }
     }
       
     contents.sort(function(a, b) {
+        if (a.type !== b.type) {
+             return a.type === 'FOLDER' ? -1 : 1;
+        }
         return new Date(b.dateAdded).getTime() - new Date(a.dateAdded).getTime();
     });
 
@@ -148,7 +156,7 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
 
   const handleCopy = () => {
     navigator.clipboard.writeText(scriptCode);
-    alert("Đã sao chép V13! Đã tối ưu tìm kiếm Toàn bộ vs Cục bộ.");
+    alert("Đã sao chép V16! Đã thêm tùy chọn giới hạn số lượng.");
   };
 
   return (
@@ -159,7 +167,7 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
             <span className="bg-blue-100 text-blue-600 p-1.5 rounded-md">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
             </span>
-            Cập nhật API (V13 - Tìm Kiếm Nâng Cao)
+            Cập nhật API (V16 - Tùy Chỉnh Giới Hạn)
           </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -177,7 +185,7 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
                 <div className="ml-3">
                     <h3 className="text-sm font-bold text-orange-800">CÁCH CẬP NHẬT</h3>
                     <div className="mt-2 text-sm text-gray-700 space-y-2">
-                        <p>Để tính năng tìm kiếm mới hoạt động, bạn cần:</p>
+                        <p>Để chọn số lượng hồ sơ (5000, 10000...) từ web:</p>
                         <ol className="list-decimal ml-4 text-orange-800 font-medium">
                             <li>Copy Code bên dưới.</li>
                             <li>Dán vào Google Apps Script (thay thế toàn bộ code cũ).</li>
@@ -191,13 +199,13 @@ export const ConnectModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
 
           <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                    <h3 className="text-sm font-medium text-gray-900">Script V13:</h3>
+                    <h3 className="text-sm font-medium text-gray-900">Script V16:</h3>
                     <button 
                         onClick={handleCopy}
                         className="flex items-center gap-1 bg-blue-600 text-white hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
                     >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" /></svg>
-                        Sao chép Code V13
+                        Sao chép Code V16
                     </button>
                 </div>
                 <div className="relative group">
