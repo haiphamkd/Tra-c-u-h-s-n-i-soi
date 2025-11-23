@@ -19,6 +19,13 @@ export interface DirectoryItem {
   size?: number;        // Size in bytes for files
 }
 
+export interface ApiResponse {
+  items: DirectoryItem[];
+  nextPageToken?: string | null;
+  phase?: 'FOLDER' | 'FILE' | 'DONE';
+  error?: string;
+}
+
 export interface ImportResult {
   items: DirectoryItem[];
 }

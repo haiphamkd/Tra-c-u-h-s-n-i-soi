@@ -1,5 +1,4 @@
-
-import { DirectoryItem, ItemType } from "../types";
+import { ApiResponse, ItemType } from "../types";
 
 export const fetchDriveData = async (
     scriptUrl: string, 
@@ -7,11 +6,13 @@ export const fetchDriveData = async (
     searchQuery?: string, 
     days?: string | number,
     scope: 'global' | 'current' = 'global',
-    limit: string | number = 5000
-): Promise<DirectoryItem[]> => {
-  // Timeout 90s for client
+    limit: string | number = 5000,
+    pageToken?: string,
+    phase?: string
+): Promise<ApiResponse> => {
+  // Increase timeout to 90s to handle slow network/cold starts
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 90000); 
+  const timeoutId = setTimeout(() => controller.abort("Request timed out"), 90000); 
 
   try {
     const url = new URL(scriptUrl);
@@ -23,7 +24,11 @@ export const fetchDriveData = async (
     if (scope) url.searchParams.append("scope", scope);
     if (limit) url.searchParams.append("limit", limit.toString());
     
-    // Cache busting (Anti-cache)
+    // V17 Pagination Params
+    if (pageToken) url.searchParams.append("token", encodeURIComponent(pageToken));
+    if (phase) url.searchParams.append("phase", phase);
+    
+    // Cache busting
     url.searchParams.append("_t", new Date().getTime().toString());
     
     const response = await fetch(url.toString(), { 
@@ -49,14 +54,15 @@ export const fetchDriveData = async (
         data = JSON.parse(text);
     } catch (e) {
         console.error("Invalid JSON:", text);
-        throw new Error("Dữ liệu trả về lỗi. Vui lòng kiểm tra lại Deployment trong Google Apps Script.");
+        throw new Error("Dữ liệu trả về lỗi JSON. Kiểm tra Deployment.");
     }
     
-    if (data && data.error) {
+    if (data.error) {
         throw new Error(data.error);
     }
 
-    return data.map((item: any) => ({
+    // Map items
+    const mappedItems = (data.items || []).map((item: any) => ({
       id: item.id,
       name: item.name,
       url: item.url,
@@ -70,13 +76,19 @@ export const fetchDriveData = async (
       size: item.size 
     }));
 
+    return {
+        items: mappedItems,
+        nextPageToken: data.nextPageToken,
+        phase: data.phase
+    };
+
   } catch (error: any) {
     clearTimeout(timeoutId);
     console.error("Fetch Error:", error);
     
-    // Improved timeout message
+    // Handle generic AbortError or specific message "signal is aborted without reason"
     if (error.name === 'AbortError' || error.message?.includes('aborted')) {
-        throw new Error("Kết nối đến Google Server quá lâu. Vui lòng thử lại hoặc giảm phạm vi thời gian.");
+        throw new Error("Kết nối quá lâu (Timeout). Vui lòng thử lại.");
     }
     
     throw error;
